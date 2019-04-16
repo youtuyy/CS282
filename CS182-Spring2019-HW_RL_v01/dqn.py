@@ -178,7 +178,23 @@ class QLearner(object):
         # ----------------------------------------------------------------------
         # START OF YOUR CODE
         # ----------------------------------------------------------------------
+        q_t = q_func(obs_t_float, self.num_actions, scope="q_func", reuse=False)
+        q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="q_func")
 
+        q_tp1 = q_func(obs_tp1_float, self.num_actions, scope="target_q_func", reuse=False)
+        target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="target_q_func")
+
+        self.greedy_action = tf.argmax(q_t, axis=1)
+        q_t_act = tf.reduce_sum(q_t * tf.one_hot(self.act_t_ph, depth=self.num_actions), axis=1)
+
+        if not double_q:
+            target = self.rew_t_ph + (1.0 - self.done_mask_ph) * gamma * tf.reduce_max(q_tp1, axis=1)
+        else: # DDQN
+            q_next_target = q_func(obs_tp1_float, self.num_actions, scope="q_func", reuse=True)
+            best_q = tf.reduce_sum(q_tp1 * tf.one_hot(tf.argmax(q_next_target, axis=1), depth=self.num_actions), axis=1)
+            target = self.rew_t_ph + (1.0 - self.done_mask_ph) * gamma * best_q
+
+        self.total_error = huber_loss(target - q_t_act)
         # ----------------------------------------------------------------------
         # END OF YOUR CODE
         # ----------------------------------------------------------------------
@@ -260,7 +276,21 @@ class QLearner(object):
         # ----------------------------------------------------------------------
         # START OF YOUR CODE
         # ----------------------------------------------------------------------
+        idx = self.replay_buffer.store_frame(self.last_obs)
 
+        if random.random() < self.exploration.value(self.t) or not self.model_initialized:
+            action = self.env.action_space.sample()
+        else:
+            input_obs = self.replay_buffer.encode_recent_observation()
+            action = self.session.run(self.greedy_action, {self.obs_t_ph: [input_obs]})
+
+        new_state, reward, done, info = self.env.step(action)
+
+        self.replay_buffer.store_effect(idx, action, reward, done)
+        self.last_obs = new_state
+
+        if done:
+            self.last_obs = self.env.reset()
         # ----------------------------------------------------------------------
         # END OF YOUR CODE
         # ----------------------------------------------------------------------
@@ -308,6 +338,27 @@ class QLearner(object):
             # ------------------------------------------------------------------
             # START OF YOUR CODE
             # ------------------------------------------------------------------
+            
+            obs_batch, act_batch, rew_batch, next_obs_batch, done_mask = self.replay_buffer.sample(self.batch_size)
+
+            if not self.model_initialized:
+                self.session.run(tf.variables_initializer(tf.global_variables()), 
+                                                     {self.obs_t_ph: obs_batch,
+                                                     self.obs_tp1_ph: next_obs_batch, })
+                self.model_initialized = True
+
+            feed_dict = {
+              self.obs_t_ph: obs_batch,
+              self.act_t_ph: act_batch,
+              self.rew_t_ph: rew_batch,
+              self.obs_tp1_ph: next_obs_batch,
+              self.done_mask_ph: done_mask,
+              self.learning_rate: self.optimizer_spec.lr_schedule.value(self.t)
+              }
+            self.session.run(self.train_fn, feed_dict=feed_dict)
+
+            if self.num_param_updates % self.target_update_freq == 0:
+                self.session.run(self.update_target_fn)
 
             # ------------------------------------------------------------------
             # END OF YOUR CODE

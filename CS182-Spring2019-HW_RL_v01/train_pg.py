@@ -148,8 +148,8 @@ class Agent(object):
             # ------------------------------------------------------------------
             # START OF YOUR CODE
             # ------------------------------------------------------------------
-            sy_mean = build_mlp(sy_ob_no, self.ac_dim, 'continuous_logits', n_layers=self.n_layers, size=self.size)
-            sy_logstd = tf.Variable(tf.zeros(self.ac_dim), name='sy_logstd')
+            sy_mean = build_mlp(sy_ob_no, self.ac_dim, "policy_theta", self.n_layers, self.size)
+            sy_logstd = tf.get_variable(name="logstd", shape=[self.ac_dim], dtype=tf.float32, trainable=True, initializer=tf.zeros_initializer())
             # ------------------------------------------------------------------
             # END OF YOUR CODE
             # ------------------------------------------------------------------
@@ -197,7 +197,7 @@ class Agent(object):
             # ------------------------------------------------------------------
             # START OF YOUR CODE
             # ------------------------------------------------------------------
-            sy_sampled_ac = sy_mean + tf.exp(sy_logstd) * tf.random_normal(tf.shape(sy_mean))
+            sy_sampled_ac = tf.exp(tf.reshape( sy_logstd, [1, self.ac_dim]))*tf.random_normal(shape=tf.shape(sy_mean)) + sy_mean
             # ------------------------------------------------------------------
             # END OF YOUR CODE
             # ------------------------------------------------------------------
@@ -244,7 +244,7 @@ class Agent(object):
             # ------------------------------------------------------------------
             # START OF YOUR CODE
             # ------------------------------------------------------------------
-            sy_logprob_n = tfp.distributions.MultivariateNormalDiag(loc=sy_mean, scale_diag=tf.exp(sy_logstd)).log_prob(sy_ac_na) 
+            sy_logprob_n = tf.contrib.distributions.MultivariateNormalDiag(loc=sy_mean, scale_diag=tf.exp(sy_logstd)).log_prob(sy_ac_na)
             # ------------------------------------------------------------------
             # END OF YOUR CODE
             # ------------------------------------------------------------------
@@ -290,7 +290,8 @@ class Agent(object):
         # ------------------------------------------------------------------
         # START OF YOUR CODE
         # ------------------------------------------------------------------
-        loss = tf.reduce_sum(-self.sy_logprob_n * self.sy_adv_n)
+        self.loss =  -tf.reduce_mean(tf.multiply(self.sy_logprob_n, self.sy_adv_n))
+        # tf.reduce_sum(-self.sy_logprob_n * self.sy_adv_n)
         # ------------------------------------------------------------------
         # END OF YOUR CODE
         # ------------------------------------------------------------------
@@ -328,6 +329,7 @@ class Agent(object):
             # ------------------------------------------------------------------
             # START OF YOUR CODE
             # ------------------------------------------------------------------
+            ac = self.sess.run(self.sy_sampled_ac, feed_dict={self.sy_ob_no: ob[None]})
             # ------------------------------------------------------------------
             # END OF YOUR CODE
             # ------------------------------------------------------------------
@@ -408,6 +410,23 @@ class Agent(object):
         # ------------------------------------------------------------------
         # START OF YOUR CODE
         # ------------------------------------------------------------------
+        q_n = []
+        if self.reward_to_go:
+            for r in re_n:
+                episode_length = len(r)
+                q = np.zeros_like(r)
+                q[-1] = r[-1]
+                for i in reversed(range(episode_length - 1)):
+                    q[i] = r[i] + self.gamma * q[i + 1]
+                q_n.extend(q)
+        else:
+            for r in re_n:
+                ret_tar = 0
+                for i, reward in enumerate(r):
+                    ret_tar += self.gamma**i * reward
+                q = np.ones_like(r) * ret_tar
+                q_n.extend(q)
+
         # ------------------------------------------------------------------
         # END OF YOUR CODE
         # ------------------------------------------------------------------
@@ -454,7 +473,7 @@ class Agent(object):
             # ------------------------------------------------------------------
             # START OF YOUR CODE
             # ------------------------------------------------------------------
-            pass
+            adv_n = ( adv_n - np.mean(adv_n) ) / np.std(adv_n)
             # ------------------------------------------------------------------
             # END OF YOUR CODE
             # ------------------------------------------------------------------
@@ -490,6 +509,7 @@ class Agent(object):
         # ------------------------------------------------------------------
         # START OF YOUR CODE
         # ------------------------------------------------------------------
+        self.sess.run(self.update_op, feed_dict={self.sy_ob_no:ob_no, self.sy_ac_na:ac_na, self.sy_adv_n:adv_n})
         # ------------------------------------------------------------------
         # END OF YOUR CODE
         # ------------------------------------------------------------------
